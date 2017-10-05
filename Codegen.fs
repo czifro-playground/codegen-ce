@@ -1,56 +1,57 @@
 module Codegen
 
-  open System
-  open System.IO
+  open StringWriter
 
-  type IndentedStringWriter() =
-    inherit StringWriter() with
+  type CodegenResult = CodegenResult of IndentedStringWriter
 
-      let indentSize = 4
-      let mutable indentLevel = 0
-      let mutable indentPending = false
-
-      let getIndent() =
-        if indentPending && indentLevel > 0 then
-          indentPending <- false
-          ("",[| for i in 1..(indentSize * indentLevel) -> " " |])
-          |> String.Join
-        else ""
-
-      override __.Write(v:string) =
-        let indent = getIndent()
-        base.Write (indent + v)
-
-      override __.WriteLine() =
-        indentPending <- true
-        base.WriteLine()
-
-      member __.IncrementIndent() =
-        indentLevel <- indentLevel + 1
-
-      member __.DecrementIndent() =
-        indentLevel <- indentLevel - 1
-
-      member this.Indent() = new Indenter(this)
-
-  and Indenter(isw:IndentedStringWriter) =
-    do
-      isw.IncrementIndent()
-
-    interface IDisposable with
-
-      override __.Dispose() = isw.DecrementIndent()
-
-  type Codegen = Codegen of (IndentedStringWriter -> IndentedStringWriter)
+  type Codegen = Codegen of (CodegenResult -> CodegenResult)
 
   [<RequireQualifiedAccessAttribute>]
   [<CompilationRepresentationAttribute(CompilationRepresentationFlags.ModuleSuffix)>]
   module Codegen =
 
-    let init _ = new IndentedStringWriter()
+    let init _ = Codegen(fun c -> c)
 
     let bind c f =
-      Codegen(fun isw ->
+      Codegen(fun c' ->
         let (Codegen c) = c
-        let (Codegen f) = f ()
+        let (Codegen f) = f
+
+        f (c c')
       )
+
+    let newLine c =
+      Codegen(fun c' ->
+        let (Codegen c) = c
+        let (CodegenResult c') = c c'
+
+        c'.WriteLine()
+        (CodegenResult c')
+      )
+
+    let useIndent c f =
+      Codegen(fun c' ->
+        let (CodegenResult c') = c'
+        let (Codegen f) = f
+
+        use indent = c'.Indent()
+        f (CodegenResult c')
+      ) |> bind c
+
+    let append c (s:string) =
+      Codegen(fun c' ->
+        let (Codegen c) = c
+        let (CodegenResult c') = c c'
+
+        c'.Write s
+        (CodegenResult c')
+      )
+
+    let appendLine c s =
+      (append c s) |> newLine
+
+    let result c =
+      let (Codegen c) = c
+      let (CodegenResult c') = 
+        c (CodegenResult (new IndentedStringWriter()))
+      c'.ToString()
